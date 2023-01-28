@@ -7,10 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
-//	"strconv"
-
-	//	"strconv"
-	//	"reflect"
+	"reflect"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
 )
@@ -18,6 +15,12 @@ import (
 type employee struct {
 	ID      int `json:"id"`
 	Name    string `json:"name"`
+	Balance string `json:"balance"`
+}
+
+type batch_employee struct{
+	ID []int `json:"id"`
+	Name string `json:"name"`
 	Balance string `json:"balance"`
 }
 
@@ -152,6 +155,22 @@ func deleteEmployeebyId(w http.ResponseWriter,r *http.Request){
 	
 }
 
+func validate_employee(validate_list []int) (validated_list[] int,err error){
+	var incorrect_id[] int
+	
+	for i:=0;i<len(validate_list);i++{
+		fmt.Println("checking id",validate_list[i])
+		if reflect.TypeOf(validate_list[i]) != reflect.TypeOf(1) || validate_list[i]==0{
+			fmt.Println("Type of incorrect id\n",validate_list[i])
+			incorrect_id = append(incorrect_id,int(validate_list[i]))
+		}else{
+			validated_list =append(validated_list,validate_list[i])
+		}
+	}
+	validate_error := fmt.Errorf("invalid employee id %v",incorrect_id)
+	return validated_list, validate_error
+}
+
 func updateEmployee(w http.ResponseWriter, r *http.Request){
 	initDB()
 	body,err := io.ReadAll(r.Body)
@@ -203,8 +222,13 @@ func batch_insertion(w http.ResponseWriter, r *http.Request){
 	}
 	json.Unmarshal(body,&keyVal)
 	test_slice := keyVal["id"]
-	for i:=0;i<len(test_slice);i++{
-		result,err :=db.Query("SELECT * FROM Test_new WHERE ID = ?",test_slice[i])
+	validated_slice,err := validate_employee(test_slice)
+	if err!=nil{
+		fmt.Println("Error in validating employee",err.Error())
+    }
+	
+	for i:=0;i<len(validated_slice);i++{
+		result,err :=db.Query("SELECT * FROM Test_new WHERE ID = ?",validated_slice[i])
 		if err != nil{
 			fmt.Println("error in fetching data",err.Error())
 		}
@@ -223,11 +247,11 @@ func batch_insertion(w http.ResponseWriter, r *http.Request){
 				if err != nil{
 					fmt.Println("error in preparing",err.Error())
 				}
-				_,err = result_n.Exec(test_slice[i])
+				_,err = result_n.Exec(validated_slice[i])
 				if err!=nil{
 					fmt.Println("error in executing",err.Error())
 				}
-				added_employee = append(added_employee, test_slice[i])
+				added_employee = append(added_employee, validated_slice[i])
 			}else{
 				present_employee = append(present_employee, employee_n.ID)
 			}
@@ -236,7 +260,51 @@ func batch_insertion(w http.ResponseWriter, r *http.Request){
 	fmt.Fprintf(w,"added_employee: %v, present_employee: %v",added_employee,present_employee)
 }
 
-
+func batch_updation(w http.ResponseWriter, r*http.Request){
+	initDB()
+	var updated_employee[] int
+	var not_updated_employee []int
+	var temp_emp batch_employee
+	body,err := io.ReadAll(r.Body)
+	if err != nil{
+		fmt.Println("Error in reading response body", err.Error())
+	}
+	json.Unmarshal(body,&temp_emp)
+	id_slice := temp_emp.ID
+	fixed_balance := temp_emp.Balance
+	validated_slice,err := validate_employee(id_slice)
+	if err !=nil{
+		fmt.Println("Error validating the employee id",err.Error())
+	}
+	for i :=0;i<len(validated_slice);i++{
+		result_p,err := db.Query("SELECT * FROM Test_new WHERE ID = ?",validated_slice[i])
+		if err !=nil{
+			fmt.Println("Error in query:",err.Error())
+		}
+		defer result_p.Close()
+		var employee_n employee
+		for result_p.Next(){
+			err := result_p.Scan(&employee_n.ID,&employee_n.Name,&employee_n.Balance)
+			if  err != nil{
+				fmt.Println("Error scanning employee",err.Error())
+			}
+		}
+		if employee_n.ID != 0{
+			result,err := db.Prepare("UPDATE Test_new SET Name=?,Balance =? WHERE ID = ?")
+			if err != nil{
+				fmt.Println("Error in statement prepare ",err.Error())
+			}
+			_,err = result.Exec(employee_n.Name,fixed_balance,employee_n.ID)
+			if err != nil{
+				fmt.Println("Error in statement exec",err.Error())
+			}
+			updated_employee = append(updated_employee, employee_n.ID)
+		}else{
+			not_updated_employee = append(not_updated_employee, validated_slice[i])
+        }
+	}
+	fmt.Fprintf(w,"Updated employee: %v, not updated: %v", updated_employee,not_updated_employee)
+}
 
 func main() {
 	r := mux.NewRouter()
@@ -246,6 +314,7 @@ func main() {
 	r.HandleFunc("/delete_employee_byid",deleteEmployeebyId).Methods("DELETE")
 	r.HandleFunc("/update_employee_by_id",updateEmployee).Methods("PUT")
 	r.HandleFunc("/insert_employee_by batch",batch_insertion).Methods("POST")
+	r.HandleFunc("/update_employee_by_batch",batch_updation).Methods("PUT")
 	fmt.Println("Server started")
 	log.Fatal(http.ListenAndServe(":6000", r))
 }
